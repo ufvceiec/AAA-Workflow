@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import time
 import itertools
-import pydot
-import graphviz
+# import pydot
+# import graphviz
 
 from tqdm import tqdm
 
@@ -17,6 +17,9 @@ from matplotlib import pyplot as plt
 import matplotlib.pylab as pl
 from IPython.display import display
 
+
+from sklearn.metrics import roc_curve
+from sklearn.metrics import auc
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -26,10 +29,10 @@ from sklearn.impute import SimpleImputer
 from sklearn import preprocessing
 from scipy.stats import chi2_contingency, ttest_ind, fisher_exact
 from scipy.stats import kruskal
-from sklearn.utils.multiclass import unique_labels
+# from sklearn.utils.multiclass import unique_labels
 from sklearn.utils import shuffle
 
-from imblearn.over_sampling import RandomOverSampler, SMOTE, BorderlineSMOTE, SVMSMOTE, ADASYN
+# from imblearn.over_sampling import RandomOverSampler, SMOTE, BorderlineSMOTE, SVMSMOTE, ADASYN
 from imblearn.under_sampling import RandomUnderSampler, NearMiss, CondensedNearestNeighbour, TomekLinks, EditedNearestNeighbours, OneSidedSelection, NeighbourhoodCleaningRule
 from imblearn.combine import SMOTETomek, SMOTEENN
 
@@ -46,7 +49,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV
 from keras.wrappers.scikit_learn import KerasClassifier
 
-import copy
+# import copy
 
 import category_encoders as ce
 import os
@@ -101,6 +104,7 @@ def bools_and_lower(df):
     
     # Cogemos todas las columnas del DataFrame
     df_cols = df.select_dtypes(include=[np.object]).columns
+
     # Pasamos a minusculas todos los elementos de cada columna.
     df[df_cols] = df[df_cols].apply(lambda x: x.str.lower())
 
@@ -125,7 +129,7 @@ def drop_initials_columns(df):
                                         'FECHAREINTERVENCIÓN',
                                         'FECHAEXITUS', 
                                         'CASO',
-                                        'COMPL30D',
+                                        'COMPLICA30D',
                                         'NOO_TTOMED',
                                         'NOO_TECNICARECURSOCHIMANCHORSCUFFSEMBOLIZAIBE',
                                         'NOO_ANATOMIAAOAOILIACOILIACO',
@@ -143,7 +147,8 @@ def drop_initials_columns(df):
                                         'Presencia_Endoleak_12seg', 
                                         'Diam_max_12_seg',
                                         'Presencia_Endoleak_24seg',
-                                        'Diam_max_24_seg'])
+                                        'Diam_max_24_seg',
+                                        'TECNICAREC'])
 
     # Eliminacion de las columnas en el DataFrame.
     df_filtrado = df.drop(columns=cols_to_drop)
@@ -333,17 +338,15 @@ def imputation_tests(df, target):
         print('---------------------------------------------------------')
         print('Porcentaje de missing values: ', porcentaje, '%')
         print('Media de las 5 iteraciones')
-        rf_mean = np.mean(rf_list)
-        print('RMSE = ', mse_rf, 'para: random forest')
-
-        moda_mean = np.mean(moda_list)
-        print('RMSE = ', mse_moda, 'para: moda')
-        
-        knn_mean = np.mean(knn_list)
-        print('RMSE = ', mse_knn, 'para: knn')
-        
         mean_mean = np.mean(media_list)
-        print('RMSE = ', mse_media, 'para: media')
+        print(mse_media, 'para: media')
+        moda_mean = np.mean(moda_list)
+        print(mse_moda, 'para: moda')
+        knn_mean = np.mean(knn_list)
+        print(mse_knn, 'para: knn')
+        rf_mean = np.mean(rf_list)
+        print(mse_rf, 'para: random')
+        
         print('---------------------------------------------------------')
         print()
 
@@ -366,6 +369,10 @@ def drop_missing_values_columns(df, porcentaje):
 
     # Eliminamos las columnas del DataFrame
     df_filtrado = df.drop(columns=null_columns)
+
+    print("Columnas dropeadas: ", null_columns)
+    print("Numero de columnas dropeadas: ", len(null_columns))
+    print("Numero de columnas tras aplicar el porcentaje: ", df_filtrado.shape[1])
     
     return df_filtrado
 
@@ -431,6 +438,13 @@ def binary_encoding(df):
         
     return df
 
+def hash_encoding(df):
+        
+    he = ce.HashingEncoder(cols="EXITUS30D", return_df=True)
+    df = he.fit_transform(df)
+        
+    return df
+
 
 
 
@@ -445,9 +459,10 @@ def smote_tomed_link(df, target):
     y = df[target]
     X = df.drop(columns=[target])
     
-    smote_tl = SMOTETomek(tomek=TomekLinks(sampling_strategy='majority', random_state=42))
+    smote_tl = SMOTETomek(tomek=TomekLinks(sampling_strategy='majority'))
     X_resampled, y_resampled = smote_tl.fit_sample(X, y)
     # Redimensionamos de las clases.
+    y_resampled = y_resampled.to_numpy().reshape(-1, 1)
     y_resampled = y_resampled.reshape(np.size(X_resampled, 0),1)
     
     cols_df = df.columns
@@ -468,9 +483,10 @@ def smote_edited_nearest_neighbor(df, target):
     y = df[target]
     X = df.drop(columns=[target])
     
-    smote_enn = SMOTEENN(enn=EditedNearestNeighbours(sampling_strategy='majority', random_state=42))
+    smote_enn = SMOTEENN(enn=EditedNearestNeighbours(sampling_strategy='majority'))
     X_resampled, y_resampled = smote_enn.fit_sample(X, y)
     # Redimensionamos las clases.
+    y_resampled = y_resampled.to_numpy().reshape(-1, 1)
     y_resampled = y_resampled.reshape(np.size(X_resampled, 0),1)
     
     cols_df = df.columns
@@ -664,13 +680,35 @@ def predict_model_and_report(model, x_test, y_test, classes, batch_size=32):
     
     cnf_matrix = confusion_matrix(y_test,predicts)
     plot_confusion_matrix(cnf_matrix,classes=classes)
-    
-    return predicts
 
+    TP = cnf_matrix[1][1]
+    TN = cnf_matrix[0][0]
+    FP = cnf_matrix[0][1]
+    FN = cnf_matrix[1][0]
+
+    accuracy = (float(TP + TN)/float(TP + TN + FP + FN))
+    print("Accuracy:", round(accuracy, 4))
+
+    specificity = (TN/float(TN + FP))
+    print("Specificity:", round(specificity, 4))
+
+    sensitivity = (TP/float(TP + FN))
+    print("Sensitivity:", round(sensitivity, 4))
+
+    precision = (TP/float(TP + FP))
+    print("Precision:", round(precision, 4))
+
+    # Get AUC
+    fpr, tpr, thresholds = roc_curve(y_test, predicts) # library: from sklearn.metrics import roc_curve
+    roc_auc = auc(fpr, tpr) # libreary: from sklearn.metrics import auc
+    print("AUC:", round(roc_auc, 4))
+
+    return predicts
 
 """
    Entrenamiento de multiples MLPs
 """
+
 def train_multiple_models(x_train, y_train, x_test, y_test, n, best_params, path, patience):
     scores = []
     for i in range(n):
